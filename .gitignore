@@ -1,0 +1,92 @@
+# ===============================
+# Python
+# ===============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+conda_env/
+*.conda
+
+# ===============================
+# Jupyter Notebook
+# ===============================
+.ipynb_checkpoints/
+
+# ===============================
+# Logs & training outputs
+# ===============================
+logs/
+log/
+runs/
+result/
+results/
+outputs/
+checkpoints/
+*.log
+*.out
+*.err
+*.npz
+*.pth
+*.pt
+
+# ===============================
+# Figures
+# ===============================
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+
+# ===============================
+# Data
+# ===============================
+data/
+datasets/
+*.csv
+*.npy
+
+# ===============================
+# Matplotlib cache
+# ===============================
+.matplotlib/
+
+# ===============================
+# IDE
+# ===============================
+.vscode/
+.idea/
+
+# ===============================
+# OS
+# ===============================
+.DS_Store
+Thumbs.db
+
+# ===============================
+# Testing / Coverage
+# ===============================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ===============================
+# Misc
+# ===============================
+*.tmp
+*.bak
+*.swp

@@ -5,14 +5,16 @@ export TMP=/tmp
 # ==============================
 # Basic settings
 # ==============================
-DATASET="two_moons"
+DATASET="mnist"
 N_SAMPLES=800
 NOISE=0.12
-EPOCHS=60
+EPOCHS=10
 BATCH_SIZE=128
-VQC_LAYERS=2
-N_QUBITS=2
+VQC_LAYERS=1
+
+N_QUBITS=16
 LR=0.001
+digits="0,1"    
 
 # ==============================
 # Encoder list
@@ -37,7 +39,8 @@ for encoder in "${ENCODERS[@]}"; do
         --n_qubits $N_QUBITS \
         --vqc_layers $VQC_LAYERS \
         --lr $LR \
-        --standardize
+        --standardize \
+        --digits "$digits" \
 done
 
 # ==============================
@@ -55,6 +58,7 @@ for encoder in "${ENCODERS[@]}"; do
         --vqc_layers $VQC_LAYERS \
         --lr $LR \
         --standardize \
+        --digits "$digits" \
         --hadamard False
 done
 

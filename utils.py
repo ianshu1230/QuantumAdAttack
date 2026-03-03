@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torchvision.transforms as T
-from config import Config
+from config import CFG
 from dataclasses import asdict
 
 

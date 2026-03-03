@@ -18,10 +18,11 @@ class VQC(nn.Module):
         self.hadamard = cfg.hadamard
         self._initialized = False
         
-        if "angle" in self.encoder:
-            self.n_qubits = cfg.num_classes
-        if "amplitude" in self.encoder:
-            self.n_qubits = math.ceil(math.log2(cfg.num_classes))
+        self.n_qubits = cfg.n_qubits
+        # if "angle" in self.encoder:
+        #     self.n_qubits = cfg.num_classes
+        # if "amplitude" in self.encoder:
+        #     self.n_qubits = math.ceil(math.log2(cfg.num_classes))
     
     def _lazy_init(self):
         # Random initialization of parameters

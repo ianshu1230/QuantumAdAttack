@@ -106,7 +106,7 @@ def make_mnist_subset(cfg):
     ])
 
     # download: set cfg.mnist_download = True if you want auto-download
-    download = bool(getattr(cfg, "mnist_download", False))
+    download = bool(getattr(cfg, "mnist_download", True))
 
     train = torchvision.datasets.MNIST(root=cfg.data_root, train=True,  download=download, transform=tf)
     test  = torchvision.datasets.MNIST(root=cfg.data_root, train=False, download=download, transform=tf)

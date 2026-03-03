@@ -42,40 +42,6 @@ def build_mnist_loaders(cfg):
     
     return train_loader, test_loader, cfg.num_classes
     
-    
-def make_mnist_subset(cfg):
-    tf = T.Compose([T.ToTensor()])
-
-    train = torchvision.datasets.MNIST(root="./data", train=True, download=False, transform=tf)
-    test  = torchvision.datasets.MNIST(root="./data", train=False, download=False, transform=tf)
-
-    digits = cfg.digits
-
-    digits = list(sorted(int(d) for d in digits))
-    label_map = {d: i for i, d in enumerate(digits)}
-    K = len(digits)
-
-    class Wrapped(torch.utils.data.Dataset):
-        def __init__(self, base_ds, label_map):
-            self.base_ds = base_ds
-            self.label_map = label_map
-            self.idx = [i for i, (_, y) in enumerate(base_ds) if int(y) in label_map]
-
-        def __len__(self):
-            return len(self.idx)
-
-        def __getitem__(self, i):
-            x, y = self.base_ds[self.idx[i]]
-            y = self.label_map[int(y)]
-            return x, torch.tensor(y, dtype=torch.long)
-
-    train_ds = Wrapped(train, label_map)
-    test_ds  = Wrapped(test,  label_map)
-
-    train_loader = DataLoader(train_ds, batch_size=cfg.batch_size, shuffle=True,  num_workers=cfg.num_workers)
-    test_loader  = DataLoader(test_ds,  batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
-    return train_loader, test_loader, K
-
 
 def write_csv(rows, path):
     path = Path(path)

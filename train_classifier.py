@@ -42,6 +42,9 @@ def parse_args() -> CFG:
     p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--standardize", action="store_true")
 
+    # ---- MNIST subset  ----
+    p.add_argument("--digits", type=str, default=None)
+
     # ---- training ----
     p.add_argument("--epochs", type=int, default=60)
     p.add_argument("--lr", type=float, default=1e-3)
@@ -89,6 +92,7 @@ def parse_args() -> CFG:
 
         num_classes=-1,   # infer later
         in_dim=-1,        # infer later
+        digits=a.digits,
 
         encoder=a.encoder,
         n_qubits=a.n_qubits,

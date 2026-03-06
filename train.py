@@ -34,7 +34,7 @@ def parse_args() -> CFG:
     p.add_argument("--exp_name", type=str, default="vqc_synth")
 
     # ---- data gen ----
-    p.add_argument("--dataset", type=str, default="two_moons", choices=["two_moons"])
+    p.add_argument("--dataset", type=str, default="two_moons", choices=["two_moons", "mnist"])
     p.add_argument("--n_samples", type=int, default=800)
     p.add_argument("--noise", type=float, default=0.12)
     p.add_argument("--random_state", type=int, default=42)
@@ -44,6 +44,8 @@ def parse_args() -> CFG:
 
     # ---- MNIST subset  ----
     p.add_argument("--digits", type=str, default=None)
+    p.add_argument("--data_root", type=str, default="./datasets")
+    p.add_argument("--img_size", type=int, default=4)
 
     # ---- training ----
     p.add_argument("--epochs", type=int, default=60)
@@ -51,6 +53,7 @@ def parse_args() -> CFG:
     p.add_argument("--gamma", type=float, default=0.95)
     p.add_argument("--batch_log", action="store_true")
     p.add_argument("--seed", type=int, default=87)
+    
 
     # ---- device ----
     p.add_argument("--device", type=str, default="cuda")
@@ -87,6 +90,8 @@ def parse_args() -> CFG:
         gamma=a.gamma,
         batch_log=a.batch_log,
         seed=a.seed,
+        data_root=a.data_root,
+        img_size=a.img_size,
 
         device=dev,
 
@@ -112,19 +117,18 @@ class QuantumClassifier(nn.Module):
         self.cfg = cfg
 
         self.vqc = VQC(cfg)
-        #self.head = nn.Linear(self.vqc.n_qubits, cfg.num_classes)
+        self.head = nn.Linear(self.vqc.n_qubits, cfg.num_classes)
 
         print(f"[model] encoder={cfg.encoder}, n_qubits={self.vqc.n_qubits}, vqc_layers={cfg.vqc_layers}")
-        print(f"[model] in_dim={cfg.in_dim}, num_classes={cfg.num_classes}")
+        print(f"[model] in_dim={cfg.img_size * cfg.img_size}, num_classes={cfg.num_classes}")
 
     def _preproc(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        For synthetic datasets, x is already (B, D). Keep it simple.
-        """
-        if x.dim() != 2:
-            raise ValueError(f"Expect x as (B,D), got {tuple(x.shape)}")
-        if x.size(1) < self.cfg.n_qubits and "amplitude" not in self.cfg.encoder.lower():
-            raise ValueError(f"x dim {x.size(1)} < n_qubits {self.cfg.n_qubits} for angle encoder.")
+        # Accept (B,D) or (B,C,H,W)
+        if x.dim() == 4:
+            x = x.flatten(1)          # (B, C*H*W)
+        elif x.dim() != 2:
+            raise ValueError(f"Expect x as (B,D) or (B,C,H,W), got {tuple(x.shape)}")
+
         return x
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -214,7 +218,7 @@ def main():
         for x, y in tqdm.tqdm(train_loader, desc=f"Epoch {epoch:02d}"):
             x = x.to(cfg.device)
             y = y.to(cfg.device)
-                
+
             optimizer.zero_grad(set_to_none=True)
             logits = model(x)
 

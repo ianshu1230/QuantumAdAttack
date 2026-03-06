@@ -25,9 +25,8 @@ class CFG:
     test_ratio: float
     batch_size: int
     standardize: bool
-    data_root: str = "./datasets"  #  set this to your desired data directory
-    digits: list[int] | str | None = None  # for MNIST subset, e.g., [0,1] or "0,1"
-    img_size: int = 4
+    digits: list[int] 
+
 
     # labels / dims
     num_classes: int      # will be inferred from y if set to -1
@@ -41,3 +40,6 @@ class CFG:
 
     # resume
     resume_path: str
+
+    data_root: str
+    img_size: int

@@ -1,3 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 export TMPDIR=/tmp
 export TEMP=/tmp
 export TMP=/tmp
@@ -14,52 +17,55 @@ VQC_LAYERS=1
 
 N_QUBITS=16
 LR=0.001
-digits="0,1"    
+DIGITS="0,1"
+DATA_ROOT="./datasets"
+IMG_SIZE=4
 
-# ==============================
-# Encoder list
-# ==============================
 ENCODERS=(
-    "angle_rx"
-    "angle_ry"
-    "angle_rz"
+  "angle_rx"
+  "angle_ry"
+  "angle_rz"
 )
 
 # ==============================
-# Train (Hadamard ON)
+# Train Hadamard OFF
 # ==============================
 for encoder in "${ENCODERS[@]}"; do
-    python train.py \
-        --dataset "$DATASET" \
-        --n_samples $N_SAMPLES \
-        --noise $NOISE \
-        --epochs $EPOCHS \
-        --batch_size $BATCH_SIZE \
-        --encoder "$encoder" \
-        --n_qubits $N_QUBITS \
-        --vqc_layers $VQC_LAYERS \
-        --lr $LR \
-        --standardize \
-        --digits "$digits" \
+  python train.py \
+    --dataset "$DATASET" \
+    --n_samples "$N_SAMPLES" \
+    --noise "$NOISE" \
+    --epochs "$EPOCHS" \
+    --batch_size "$BATCH_SIZE" \
+    --encoder "$encoder" \
+    --n_qubits "$N_QUBITS" \
+    --vqc_layers "$VQC_LAYERS" \
+    --lr "$LR" \
+    --standardize \
+    --digits "$DIGITS" \
+    --data_root "$DATA_ROOT" \
+    --img_size "$IMG_SIZE"
 done
 
 # ==============================
-# Train (Hadamard OFF)
+# Train Hadamard ON
 # ==============================
 for encoder in "${ENCODERS[@]}"; do
-    python train.py \
-        --dataset "$DATASET" \
-        --n_samples $N_SAMPLES \
-        --noise $NOISE \
-        --epochs $EPOCHS \
-        --batch_size $BATCH_SIZE \
-        --encoder "$encoder" \
-        --n_qubits $N_QUBITS \
-        --vqc_layers $VQC_LAYERS \
-        --lr $LR \
-        --standardize \
-        --digits "$digits" \
-        --hadamard False
+  python train.py \
+    --dataset "$DATASET" \
+    --n_samples "$N_SAMPLES" \
+    --noise "$NOISE" \
+    --epochs "$EPOCHS" \
+    --batch_size "$BATCH_SIZE" \
+    --encoder "$encoder" \
+    --n_qubits "$N_QUBITS" \
+    --vqc_layers "$VQC_LAYERS" \
+    --lr "$LR" \
+    --standardize \
+    --digits "$DIGITS" \
+    --data_root "$DATA_ROOT" \
+    --img_size "$IMG_SIZE" \
+    --hadamard
 done
 
-echo "All synthetic experiments completed."
+echo "All experiments completed."

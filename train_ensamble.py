@@ -22,7 +22,7 @@ from utils import (
     write_csv,
 )
 
-from modules.vqc import VQC
+from modules.vqc import EnsembleSharedVQC
 from dataGen import make_loaders
 
 
@@ -56,7 +56,7 @@ def parse_args() -> CFG:
     p.add_argument("--device", type=str, default="cuda")
 
     # ---- VQC ----
-    p.add_argument("--encoder", type=str, default="angle_ry")
+    p.add_argument("--encoder", type=str, default="ensamble")
     p.add_argument("--n_qubits", type=int, default=2)      #  two_moons is 2D, start from 2
     p.add_argument("--vqc_layers", type=int, default=2)
     p.add_argument("--hadamard", action="store_true")
@@ -111,8 +111,8 @@ class QuantumClassifier(nn.Module):
         super().__init__()
         self.cfg = cfg
 
-        self.vqc = VQC(cfg)
-        #self.head = nn.Linear(self.vqc.n_qubits, cfg.num_classes)
+        self.vqc = EnsembleSharedVQC(cfg)
+        self.head = nn.Linear(self.vqc.n_qubits, cfg.num_classes)
 
         print(f"[model] encoder={cfg.encoder}, n_qubits={self.vqc.n_qubits}, vqc_layers={cfg.vqc_layers}")
         print(f"[model] in_dim={cfg.in_dim}, num_classes={cfg.num_classes}")
@@ -153,35 +153,29 @@ def main():
 
     root_dir = Path(cfg.outdir)
 
-    # q2_L2
-    base_dir = root_dir / cfg.dataset / cfg.encoder / f"q{cfg.n_qubits}_L{cfg.vqc_layers}"
+    encoder_tag = "ensemble"
+    base_dir = root_dir / cfg.dataset / encoder_tag / f"q{cfg.n_qubits}_L{cfg.vqc_layers}"
 
-    # vqc_h / vqc
     vqc_tag = "vqc_h" if cfg.hadamard else "vqc"
-
     outdir = base_dir / vqc_tag
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Data
     train_loader, test_loader = make_loaders(cfg)
     print(f"[data] dataset={cfg.dataset}, in_dim={cfg.in_dim}, num_classes={cfg.num_classes}")
 
-    # sanity: for angle encoders, ensure n_qubits <= in_dim
-    if "amplitude" not in cfg.encoder.lower() and cfg.n_qubits > cfg.in_dim:
-        raise ValueError(f"angle encoder needs n_qubits <= in_dim, got n_qubits={cfg.n_qubits}, in_dim={cfg.in_dim}")
+    if cfg.n_qubits > cfg.in_dim:
+        raise ValueError(
+            f"angle-style encoder needs n_qubits <= in_dim, got n_qubits={cfg.n_qubits}, in_dim={cfg.in_dim}"
+        )
 
-    # Model
     model = QuantumClassifier(cfg).to(cfg.device)
 
-    # Warmup forward
     x0, y0 = next(iter(train_loader))
     x0 = x0.to(cfg.device)
     _ = model(x0)
 
-    # Draw circuit
     draw_circuit_once(model, x0, outdir / "circuit.png")
 
-    # Optim
     trainable = [p for p in model.parameters() if p.requires_grad]
     trainable_params = sum(p.numel() for p in trainable)
     total_params = sum(p.numel() for p in model.parameters())
@@ -207,6 +201,7 @@ def main():
             print(f"[resume] resume_path not found: {rp}")
 
     log_rows: List[List[Any]] = [["epoch", "iter", "train_loss", "test_acc", "trainable_params", "total_params"]]
+    arch_log_rows: List[List[Any]] = [["epoch"] + list(model.vqc.encoder_list)]
 
     for epoch in range(start_epoch, cfg.epochs + 1):
         model.train()
@@ -214,7 +209,7 @@ def main():
         for x, y in tqdm.tqdm(train_loader, desc=f"Epoch {epoch:02d}"):
             x = x.to(cfg.device)
             y = y.to(cfg.device)
-                
+
             optimizer.zero_grad(set_to_none=True)
             logits = model(x)
 
@@ -230,23 +225,35 @@ def main():
 
         model.eval()
         test_acc = eval_accuracy_search(model, test_loader, cfg.device)
-
         log_rows.append([epoch, global_iter, "", float(test_acc), trainable_params, total_params])
+
         print(f"[epoch {epoch:02d}] Test Acc = {test_acc:.4f}")
 
+        if hasattr(model.vqc, "alpha"):
+            with torch.no_grad():
+                arch_w = torch.softmax(model.vqc.alpha, dim=0).detach().cpu().numpy()
+
+            arch_log_rows.append([epoch] + [float(w) for w in arch_w.tolist()])
+            write_csv(arch_log_rows, outdir / "encoder_weights.csv")
+
+            print(
+                f"[epoch {epoch:02d}] encoder_weights = " +
+                ", ".join(f"{n}:{w:.4f}" for n, w in zip(model.vqc.encoder_list, arch_w))
+            )
+
         write_csv(log_rows, outdir / "loss.csv")
-        save_ckpt(ckpt_dir / "last_search.pth", model, optimizer, epoch, best_acc, cfg)
 
         if test_acc > best_acc:
             best_acc = test_acc
             save_ckpt(ckpt_dir / "best_search.pth", model, optimizer, epoch, best_acc, cfg)
             print(f"[ckpt] Saved BEST: acc={best_acc:.4f}")
 
+        save_ckpt(ckpt_dir / "last_search.pth", model, optimizer, epoch, best_acc, cfg)
+
         scheduler.step()
 
     print("[done] Best acc:", best_acc)
     print("[done] Saved to:", str(outdir))
-
 
 if __name__ == "__main__":
     main()

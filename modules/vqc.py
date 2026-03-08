@@ -108,6 +108,27 @@ class VQC(nn.Module):
         qfeats = torch.stack(qfeats, dim=1)
         return qfeats.to(dtype=torch.float32, device=self.device)
 
+
+class ResidualEncoderController(nn.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        n_encoders: int,
+        residual_scale: float = 0.5,
+    ):
+        super().__init__()
+
+        self.residual_scale = residual_scale
+        self.linear = nn.Linear(in_dim, n_encoders)
+
+        nn.init.xavier_uniform_(self.linear.weight, gain=0.3)
+        nn.init.zeros_(self.linear.bias)
+
+    def forward(self, x):
+        raw = self.linear(x)                    # (B, E)
+        delta = self.residual_scale * torch.tanh(raw)
+        return delta
+
 class EnsembleSharedVQC(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -123,7 +144,6 @@ class EnsembleSharedVQC(nn.Module):
             "angle_ry",
             "h_angle_rx",
             "h_angle_ry",
-            #"amplitude",
         ]
         self.n_encoders = len(self.encoder_list)
 
@@ -134,22 +154,32 @@ class EnsembleSharedVQC(nn.Module):
                 dtype=torch.float32
             )
         )
-
-        # structural weights / architecture weights
-        # 經 softmax 後變成每個 encoder 的權重
-        self.alpha = nn.Parameter(torch.zeros(self.n_encoders, dtype=torch.float32))
+        self.controller = ResidualEncoderController(
+            in_dim=self.n_qubits,   # 通常是原始輸入維度
+            n_encoders=self.n_encoders,
+            #hidden_dim=getattr(cfg, "controller_hidden_dim", 64),
+            #num_layers=getattr(cfg, "controller_num_layers", 2),
+            #dropout=getattr(cfg, "controller_dropout", 0.0),
+            #use_layernorm=getattr(cfg, "controller_layernorm", False),
+            residual_scale=getattr(cfg, "residual_scale", 0.5),
+        )
+        self.temperature = getattr(cfg, "temperature", 1.0)
+        # architecture weights
+        self.alpha = nn.Parameter(
+            torch.zeros(self.n_encoders, dtype=torch.float32)
+        )
 
         # quantum device
         self.qdev = qml.device("lightning.qubit", wires=self.n_qubits)
 
-        # 建立多個 qnode，每個 qnode 只差在 encoder
-        self.qnodes = nn.ModuleList()  # 只是佔位，不放 qnode
+        # 建立多個 qnode
         self._build_qnodes()
 
+        # 給 draw_circuit_once 用
+        # 固定拿第一個 encoder 當代表圖
+        self.circuit = self.circuits[self.encoder_list[0]]
+
     def _encode_input(self, features, encoder_name):
-        """
-        這個函式只負責在 qnode 裡呼叫對應 encoder。
-        """
         n = self.n_qubits
         enc = encoder_name.lower()
 
@@ -185,7 +215,6 @@ class EnsembleSharedVQC(nn.Module):
                 qml.RY(theta[l, q, 1], wires=q)
                 qml.RZ(theta[l, q, 2], wires=q)
 
-            # brick entanglement
             for q in range(0, n - 1, 2):
                 qml.CNOT(wires=[q, q + 1])
             for q in range(1, n - 1, 2):
@@ -203,7 +232,6 @@ class EnsembleSharedVQC(nn.Module):
         self.circuits = {}
         for enc in self.encoder_list:
             circ = self._build_single_qnode(enc)
-            # amplitude 常常需要 broadcast_expand
             if "amplitude" in enc:
                 circ = qml.transforms.broadcast_expand(circ)
             self.circuits[enc] = circ
@@ -214,33 +242,58 @@ class EnsembleSharedVQC(nn.Module):
         return: (B, n_qubits)
         """
         outs = []
+        target_device = x.device
+
         for i in range(x.shape[0]):
             qi = self.circuits[encoder_name](x[i], self.theta)
             qi = torch.stack(qi) if isinstance(qi, (list, tuple)) else qi
+            qi = qi.to(device=target_device, dtype=torch.float32)
             outs.append(qi)
-        return torch.stack(outs, dim=0)
 
-    def forward(self, features, return_branch_outputs=False):
+        return torch.stack(outs, dim=0).to(device=target_device, dtype=torch.float32)
+
+    def forward(self, features, return_branch_outputs=False, return_controller=False):
         """
-        features: (B, D) 或單筆 (D,)
+        features: (B, D) or (D,)
         """
         if features.dim() == 1:
             features = features.unsqueeze(0)
 
-        # structural weights
-        arch_w = torch.softmax(self.alpha, dim=0)   # (n_encoders,)
+        B = features.size(0)
 
+        # controller 看完整輸入
+        ctrl_features = features
+
+        # quantum encoder 若是 angle-family，只吃前 n_qubits 維
+        q_features = features
+        if q_features.size(1) > self.n_qubits:
+            q_features = q_features[:, :self.n_qubits]
+
+        # ----- residual controller -----
+        delta_logits = self.controller(ctrl_features)              # (B, E)
+        base_logits = self.alpha.unsqueeze(0).expand(B, -1)       # (B, E)
+        mixed_logits = base_logits + delta_logits                  # (B, E)
+        arch_w = torch.softmax(mixed_logits / self.temperature, dim=-1)  # (B, E)
+
+        # ----- run all branches -----
         branch_outputs = []
-        for enc in self.encoder_list:
-            out_enc = self._run_single_encoder_batch(features, enc)  # (B, n_qubits)
+        for enc in self.vqc.encoder_list:
+            out_enc = self.vqc._run_single_encoder_batch(q_features, enc)
+            out_enc = out_enc.to(device=feats.device, dtype=torch.float32)
             branch_outputs.append(out_enc)
 
-        # (E, B, Q)
-        branch_outputs = torch.stack(branch_outputs, dim=0)
+        branch_outputs = torch.stack(branch_outputs, dim=1).to(device=feats.device, dtype=torch.float32)
 
         # weighted sum over encoders
-        y = torch.einsum("e,ebq->bq", arch_w, branch_outputs)
+        y = torch.einsum("be,beq->bq", arch_w, branch_outputs)
+        y = y.to(dtype=torch.float32, device=features.device)
+
+        outputs = [y]
 
         if return_branch_outputs:
-            return y, arch_w, branch_outputs
-        return y
+            outputs.append(branch_outputs)
+
+        if return_controller:
+            outputs.extend([arch_w, mixed_logits, delta_logits])
+
+        return outputs[0] if len(outputs) == 1 else tuple(outputs)

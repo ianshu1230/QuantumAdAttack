@@ -68,10 +68,24 @@ def save_ckpt(
 
 def load_model_only(path: Path, model: nn.Module, device: str) -> Dict:
     ckpt = torch.load(path, map_location=device)
+
     if "model_state_dict" in ckpt:
-        model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        state_dict = ckpt["model_state_dict"]
+    elif "model_state" in ckpt:
+        state_dict = ckpt["model_state"]
     else:
-        model.load_state_dict(ckpt, strict=False)
+        state_dict = ckpt
+
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+
+    print("[load] missing keys:")
+    for k in missing:
+        print("  ", k)
+
+    print("[load] unexpected keys:")
+    for k in unexpected:
+        print("  ", k)
+
     return ckpt
 
 
@@ -108,6 +122,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=87)
     p.add_argument("--batch_log", action="store_true")
 
+    # ---- controller ----
+    p.add_argument("--temperature", type=float, default=1.0)
+    p.add_argument("--residual_scale", type=float, default=0.5)
+
     # ---- loss weights ----
     p.add_argument("--lambda_clean", type=float, default=1.0)
     p.add_argument("--lambda_adv", type=float, default=1.0)
@@ -135,7 +153,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n_qubits", type=int, default=2)
     p.add_argument("--vqc_layers", type=int, default=2)
     p.add_argument("--hadamard", action="store_true")
-    p.add_argument("--temperature", type=float, default=1.0)
 
     args = p.parse_args()
 
@@ -171,60 +188,6 @@ class QuantumClassifier(nn.Module):
             raise ValueError(f"Expect x as (B,D) or (B,C,H,W), got {tuple(x.shape)}")
         return x
 
-    def forward_quantum(
-        self,
-        feats: torch.Tensor,
-        use_controller: bool = True,
-        return_controller: bool = False,
-        return_branch_outputs: bool = False,
-    ):
-        """
-        直接在 training script 內手動組 VQC forward，
-        這樣不需要改你 modules/vqc.py 的 forward 介面。
-        """
-        if feats.dim() == 1:
-            feats = feats.unsqueeze(0)
-
-        B = feats.size(0)
-        ctrl_features = feats
-
-        q_features = feats
-        if q_features.size(1) > self.vqc.n_qubits:
-            q_features = q_features[:, :self.vqc.n_qubits]
-
-        # branch outputs
-        branch_outputs = []
-        for enc in self.vqc.encoder_list:
-            out_enc = self.vqc._run_single_encoder_batch(q_features, enc)   # (B, Q)
-            branch_outputs.append(out_enc)
-        branch_outputs = torch.stack(branch_outputs, dim=1)  # (B, E, Q)
-
-        # controller weights
-        base_logits = self.vqc.alpha.unsqueeze(0).expand(B, -1)  # (B, E)
-
-        if use_controller:
-            if not hasattr(self.vqc, "controller"):
-                raise ValueError("Residual controller not found: model.vqc.controller")
-            delta_logits = self.vqc.controller(ctrl_features)     # (B, E)
-            mixed_logits = base_logits + delta_logits
-        else:
-            delta_logits = torch.zeros_like(base_logits)
-            mixed_logits = base_logits
-
-        tau = getattr(self.vqc, "temperature", getattr(self.cfg, "temperature", 1.0))
-        arch_w = torch.softmax(mixed_logits / tau, dim=-1)       # (B, E)
-
-        qfeats = torch.einsum("be,beq->bq", arch_w, branch_outputs)
-        qfeats = qfeats.to(dtype=torch.float32, device=feats.device)
-
-        outputs = [qfeats]
-        if return_branch_outputs:
-            outputs.append(branch_outputs)
-        if return_controller:
-            outputs.extend([arch_w, mixed_logits, delta_logits])
-
-        return outputs[0] if len(outputs) == 1 else tuple(outputs)
-
     def forward(
         self,
         x: torch.Tensor,
@@ -234,7 +197,7 @@ class QuantumClassifier(nn.Module):
     ):
         feats = self._preproc(x)
 
-        q_out = self.forward_quantum(
+        q_out = self.vqc(
             feats,
             use_controller=use_controller,
             return_controller=return_controller,
@@ -265,7 +228,7 @@ def draw_circuit_once(model: QuantumClassifier, example_x: torch.Tensor, out_png
         feats = model._preproc(example_x[:1]).detach()
 
     try:
-        fig, ax = qml.draw_mpl(model.vqc.circuit)(feats, model.vqc.theta)
+        fig, ax = qml.draw_mpl(model.vqc.circuit)(feats[:, :model.vqc.n_qubits], model.vqc.theta)
         fig.savefig(out_png, dpi=600, bbox_inches="tight")
         plt.close(fig)
         print(f"[viz] Circuit diagram saved to: {out_png}")
@@ -294,11 +257,9 @@ def unfreeze_controller_only(model: QuantumClassifier) -> None:
 # =========================================================
 # Attack
 # =========================================================
-def get_clip_bounds(x: torch.Tensor, dataset: str):
-    # MNIST-like image => clamp [0, 1]
+def get_clip_bounds(dataset: str):
     if dataset.lower() == "mnist":
         return 0.0, 1.0
-    # two_moons / standardized features => no clip
     return None, None
 
 
@@ -313,7 +274,7 @@ def fgsm_attack(
     was_training = model.training
     model.eval()
 
-    clip_min, clip_max = get_clip_bounds(x, dataset)
+    clip_min, clip_max = get_clip_bounds(dataset)
 
     x_adv = x.detach().clone().requires_grad_(True)
     logits = model(x_adv, use_controller=use_controller)
@@ -346,7 +307,7 @@ def pgd_attack(
     was_training = model.training
     model.eval()
 
-    clip_min, clip_max = get_clip_bounds(x, dataset)
+    clip_min, clip_max = get_clip_bounds(dataset)
 
     x_orig = x.detach()
     x_adv = x_orig.clone()
@@ -511,7 +472,7 @@ def collect_gate_stats_clean(
             use_controller=True,
             return_controller=True,
         )
-        batch_gate = arch_w.sum(dim=0)  # (E,)
+        batch_gate = arch_w.sum(dim=0)
         gate_sum = batch_gate if gate_sum is None else gate_sum + batch_gate
         total += x.size(0)
 
@@ -573,9 +534,6 @@ def main():
     args = parse_args()
     seed_everything(args.seed)
 
-    # --------------------------------------------------
-    # make cfg-like namespace for your existing make_loaders / model
-    # --------------------------------------------------
     cfg = SimpleNamespace(**vars(args))
     cfg.num_classes = -1
     cfg.in_dim = -1
@@ -584,11 +542,22 @@ def main():
     train_loader, test_loader = make_loaders(cfg)
     print(f"[data] dataset={cfg.dataset}, in_dim={cfg.in_dim}, num_classes={cfg.num_classes}")
 
-    if cfg.n_qubits > cfg.in_dim:
+    # 用實際輸入維度檢查
+    x_probe, _ = next(iter(train_loader))
+    if x_probe.dim() == 4:
+        effective_in_dim = x_probe.flatten(1).shape[1]
+    elif x_probe.dim() == 2:
+        effective_in_dim = x_probe.shape[1]
+    else:
+        raise ValueError(f"Unexpected x_probe shape: {tuple(x_probe.shape)}")
+
+    print(f"[data] effective input dim = {effective_in_dim}")
+
+    if cfg.n_qubits > effective_in_dim:
         raise ValueError(
             f"Current ensemble uses angle-style encoders only, "
-            f"so require n_qubits <= in_dim. "
-            f"Got n_qubits={cfg.n_qubits}, in_dim={cfg.in_dim}"
+            f"so require n_qubits <= effective input dim. "
+            f"Got n_qubits={cfg.n_qubits}, effective_in_dim={effective_in_dim}"
         )
 
     # Output dir
@@ -625,8 +594,27 @@ def main():
     if not pretrained_path.exists():
         raise FileNotFoundError(f"pretrained_path not found: {pretrained_path}")
 
-    ckpt = load_model_only(pretrained_path, model, cfg.device)
+    _ = load_model_only(pretrained_path, model, cfg.device)
     print(f"[pretrained] loaded from: {pretrained_path}")
+
+    # 開始前先測 clean acc
+    clean_base_acc0, clean_base_loss0 = eval_clean(
+        model=model,
+        loader=test_loader,
+        device=cfg.device,
+        use_controller=False,
+    )
+    clean_ctrl_acc0, clean_ctrl_loss0 = eval_clean(
+        model=model,
+        loader=test_loader,
+        device=cfg.device,
+        use_controller=True,
+    )
+    print(
+        f"[before training] "
+        f"clean_base_acc={clean_base_acc0:.4f}, clean_base_loss={clean_base_loss0:.4f} | "
+        f"clean_ctrl_acc={clean_ctrl_acc0:.4f}, clean_ctrl_loss={clean_ctrl_loss0:.4f}"
+    )
 
     # Train only controller
     unfreeze_controller_only(model)
@@ -677,9 +665,6 @@ def main():
     best_metric = -1.0
     global_iter = 0
 
-    # --------------------------------------------------
-    # training
-    # --------------------------------------------------
     for epoch in range(1, cfg.epochs + 1):
         model.train()
 
@@ -695,7 +680,6 @@ def main():
             x = x.to(cfg.device)
             y = y.to(cfg.device)
 
-            # generate adversarial examples against controller-enabled model
             x_adv = make_attack(
                 model=model,
                 x=x,
@@ -711,14 +695,12 @@ def main():
 
             optimizer.zero_grad(set_to_none=True)
 
-            # clean forward
             logits_clean, gate_clean, mixed_clean, delta_clean = model(
                 x,
                 use_controller=True,
                 return_controller=True,
             )
 
-            # adv forward
             logits_adv, gate_adv, mixed_adv, delta_adv = model(
                 x_adv,
                 use_controller=True,
@@ -778,9 +760,6 @@ def main():
         train_clean_acc = epoch_clean_correct / max(epoch_total, 1)
         train_adv_acc = epoch_adv_correct / max(epoch_total, 1)
 
-        # --------------------------------------------------
-        # evaluation: four cases
-        # --------------------------------------------------
         clean_ctrl_acc, clean_ctrl_loss = eval_clean(
             model=model,
             loader=test_loader,
@@ -831,17 +810,11 @@ def main():
             f"adv_base={adv_base_acc:.4f}"
         )
 
-        # --------------------------------------------------
-        # save alpha weights
-        # --------------------------------------------------
         with torch.no_grad():
             base_w = torch.softmax(model.vqc.alpha, dim=0).detach().cpu().tolist()
         encoder_rows.append([epoch] + [float(w) for w in base_w])
         write_csv(encoder_rows, outdir / "encoder_weights.csv")
 
-        # --------------------------------------------------
-        # save gate stats
-        # --------------------------------------------------
         gate_clean_mean = collect_gate_stats_clean(
             model=model,
             loader=test_loader,
@@ -864,14 +837,8 @@ def main():
         write_csv(gate_clean_rows, outdir / "gate_stats_clean.csv")
         write_csv(gate_adv_rows, outdir / "gate_stats_adv.csv")
 
-        # --------------------------------------------------
-        # save per-epoch controller weights
-        # --------------------------------------------------
         torch.save(model.vqc.controller.state_dict(), ctrl_dir / f"epoch_{epoch:03d}.pt")
 
-        # --------------------------------------------------
-        # save all metrics
-        # --------------------------------------------------
         loss_rows.append([
             epoch,
             global_iter,
@@ -894,9 +861,6 @@ def main():
         ])
         write_csv(loss_rows, outdir / "loss.csv")
 
-        # --------------------------------------------------
-        # save last
-        # --------------------------------------------------
         save_ckpt(
             ckpt_dir / "last_search.pth",
             model=model,
@@ -907,9 +871,6 @@ def main():
         )
         torch.save(model.vqc.controller.state_dict(), ckpt_dir / "last_controller.pt")
 
-        # --------------------------------------------------
-        # save best (用 adv_ctrl_acc 當主指標)
-        # --------------------------------------------------
         if adv_ctrl_acc > best_metric:
             best_metric = adv_ctrl_acc
             save_ckpt(

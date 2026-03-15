@@ -23,6 +23,8 @@ IMG_SIZE=4
 # Controller ADV training
 # =========================
 CONTROLLER_LR=0.001
+VQC_LR=0.0001          # only used in full mode (end-to-end); recommend ~1/10 of CONTROLLER_LR
+TRAIN_MODE="controller_only"   # "controller_only" | "full"
 WEIGHT_DECAY=1e-4
 GAMMA=0.95
 
@@ -69,7 +71,9 @@ python train_controller.py \
   --img_size "$IMG_SIZE" \
   --pretrained_path "$BASE_PRETRAIN" \
   --outdir "$OUTDIR" \
+  --train_mode "$TRAIN_MODE" \
   --controller_lr "$CONTROLLER_LR" \
+  --vqc_lr "$VQC_LR" \
   --weight_decay "$WEIGHT_DECAY" \
   --gamma "$GAMMA" \
   --lambda_clean "$LAMBDA_CLEAN" \
@@ -102,7 +106,9 @@ python train_controller.py \
   --img_size "$IMG_SIZE" \
   --pretrained_path "$H_PRETRAIN" \
   --outdir "$OUTDIR" \
+  --train_mode "$TRAIN_MODE" \
   --controller_lr "$CONTROLLER_LR" \
+  --vqc_lr "$VQC_LR" \
   --weight_decay "$WEIGHT_DECAY" \
   --gamma "$GAMMA" \
   --lambda_clean "$LAMBDA_CLEAN" \

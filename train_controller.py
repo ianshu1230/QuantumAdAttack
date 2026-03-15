@@ -145,6 +145,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eval_steps", type=int, default=10)
     p.add_argument("--eval_random_start", action="store_true")
 
+    # ---- train mode ----
+    p.add_argument(
+        "--train_mode",
+        type=str,
+        default="controller_only",
+        choices=["controller_only", "full"],
+        help=(
+            "controller_only: freeze VQC theta+head, only train controller (original behavior). "
+            "full: train controller + VQC theta + head end-to-end."
+        ),
+    )
+    p.add_argument(
+        "--vqc_lr",
+        type=float,
+        default=None,
+        help="Learning rate for VQC theta and head in full mode. Defaults to controller_lr if not set.",
+    )
+
     # ---- device ----
     p.add_argument("--device", type=str, default="cuda")
 
@@ -251,6 +269,12 @@ def unfreeze_controller_only(model: QuantumClassifier) -> None:
         raise ValueError("model.vqc has no attribute 'controller'")
 
     for p in model.vqc.controller.parameters():
+        p.requires_grad = True
+
+
+def unfreeze_all_params(model: QuantumClassifier) -> None:
+    """Full mode: train controller + VQC theta + head together."""
+    for p in model.parameters():
         p.requires_grad = True
 
 
@@ -567,7 +591,8 @@ def main():
     vqc_tag = "vqc_h" if cfg.hadamard else "vqc"
     atk_tag = f"train_{cfg.attack}_eps{cfg.attack_eps}_a{cfg.attack_alpha}_s{cfg.attack_steps}"
     eval_tag = f"eval_{cfg.eval_attack}_eps{cfg.eval_eps}_a{cfg.eval_alpha}_s{cfg.eval_steps}"
-    outdir = base_dir / vqc_tag / "controller_adv" / f"{atk_tag}__{eval_tag}"
+    mode_dir = "controller_adv" if cfg.train_mode == "controller_only" else "full_adv"
+    outdir = base_dir / vqc_tag / mode_dir / f"{atk_tag}__{eval_tag}"
     outdir.mkdir(parents=True, exist_ok=True)
 
     ckpt_dir = outdir / "checkpoints"
@@ -616,24 +641,50 @@ def main():
         f"clean_ctrl_acc={clean_ctrl_acc0:.4f}, clean_ctrl_loss={clean_ctrl_loss0:.4f}"
     )
 
-    # Train only controller
-    unfreeze_controller_only(model)
+    # Freeze / unfreeze according to train_mode
+    if cfg.train_mode == "controller_only":
+        print("[train_mode] controller_only: freeze VQC theta + head, train controller only")
+        unfreeze_controller_only(model)
+    else:
+        print("[train_mode] full: train controller + VQC theta + head end-to-end")
+        unfreeze_all_params(model)
 
     trainable_names = [n for n, p in model.named_parameters() if p.requires_grad]
     print("[trainable params]")
     for n in trainable_names:
         print("  ", n)
 
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    trainable_params = sum(p.numel() for p in trainable)
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
     print(f"[params] Trainable: {trainable_params}, Total: {total_params}")
 
-    optimizer = optim.Adam(
-        trainable,
-        lr=cfg.controller_lr,
-        weight_decay=cfg.weight_decay,
-    )
+    # Build optimizer (param groups for full mode to allow separate lr)
+    if cfg.train_mode == "controller_only":
+        optimizer = optim.Adam(
+            [p for p in model.parameters() if p.requires_grad],
+            lr=cfg.controller_lr,
+            weight_decay=cfg.weight_decay,
+        )
+    else:
+        vqc_lr = cfg.vqc_lr if cfg.vqc_lr is not None else cfg.controller_lr
+        controller_params = list(model.vqc.controller.parameters())
+        controller_param_ids = {id(p) for p in controller_params}
+        vqc_params = [
+            p for p in model.parameters()
+            if p.requires_grad and id(p) not in controller_param_ids
+        ]
+        optimizer = optim.Adam(
+            [
+                {"params": controller_params, "lr": cfg.controller_lr},
+                {"params": vqc_params, "lr": vqc_lr},
+            ],
+            weight_decay=cfg.weight_decay,
+        )
+        print(
+            f"[optimizer] controller_lr={cfg.controller_lr}, vqc_lr={vqc_lr}, "
+            f"controller_params={sum(p.numel() for p in controller_params)}, "
+            f"vqc_params={sum(p.numel() for p in vqc_params)}"
+        )
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=cfg.gamma)
 
     # Logs

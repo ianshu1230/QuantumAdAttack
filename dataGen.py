@@ -101,7 +101,7 @@ def make_mnist_subset(cfg):
     """
     # transforms
     tf = T.Compose([
-    T.Resize((cfg.img_size, cfg.img_size)),  # e.g. 14 or 7
+    #T.Resize((cfg.img_size, cfg.img_size)),  # e.g. 14 or 7
     T.ToTensor(),
     ])
 

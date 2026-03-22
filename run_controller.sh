@@ -32,7 +32,7 @@ LAMBDA_CLEAN=1.0
 LAMBDA_ADV=1.0
 LAMBDA_GATE=0.1
 
-TRAIN_ATTACK="pgd"
+TRAIN_ATTACK="fgsm"
 TRAIN_EPS=0.15
 TRAIN_ALPHA=0.02
 TRAIN_STEPS=7
@@ -56,7 +56,7 @@ echo "[info] Hadamard pretrained ckpt: ${H_PRETRAIN}"
 # =========================
 # Controller ADV training: no hadamard
 # =========================
-python train_controller.py \
+python3 train_controller.py \
   --dataset "$DATASET" \
   --n_samples "$N_SAMPLES" \
   --noise "$NOISE" \
@@ -91,7 +91,7 @@ python train_controller.py \
 # =========================
 # Controller ADV training: hadamard
 # =========================
-python train_controller.py \
+python3 train_controller.py \
   --dataset "$DATASET" \
   --n_samples "$N_SAMPLES" \
   --noise "$NOISE" \

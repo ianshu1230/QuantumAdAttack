@@ -15,16 +15,17 @@ EPOCHS=10
 BATCH_SIZE=128
 VQC_LAYERS=1
 
-N_QUBITS=16
+N_QUBITS=10
 LR=0.001
 DIGITS="0,1"
 DATA_ROOT="./datasets"
-IMG_SIZE=4
+IMG_SIZE=28
 
 ENCODERS=(
-  "angle_rx"
-  "angle_ry"
-  "angle_rz"
+  # "angle_rx"
+  # "angle_ry"
+  # "angle_rz"
+  "amplitude"
 )
 
 # ==============================

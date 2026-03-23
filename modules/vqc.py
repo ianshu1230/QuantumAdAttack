@@ -109,6 +109,30 @@ class VQC(nn.Module):
         return qfeats.to(dtype=torch.float32, device=self.device)
 
 
+class AmplitudeScalingGlobal(nn.Module):
+    """
+    方案 A: input-dependent global scalar。
+    scale(x) = softplus(linear(x))，每個 sample 根據輸入動態產生 scale。
+    x: (B, D)  →  x * scale(x)  →  (B, D)
+    """
+    def __init__(self, n_qubits, in_dim):
+        super().__init__()
+        self.linear = nn.Linear(in_dim, 1)
+        nn.init.zeros_(self.linear.weight)
+        # bias 初始化讓 softplus(bias) ≈ 1/sqrt(2^n)
+        init_val = 1.0 / math.sqrt(2 ** n_qubits)
+        nn.init.constant_(self.linear.bias, math.log(math.expm1(init_val)))
+
+    def forward(self, x):
+        # x: (B, D)
+        scale = torch.nn.functional.softplus(self.linear(x))  # (B, 1), always > 0
+        return x * scale                                       # (B, D)
+
+
+# 保留舊名稱作為別名，預設使用 Global 版
+AmplitudeScaling = AmplitudeScalingGlobal
+
+
 class ResidualEncoderController(nn.Module):
     def __init__(
         self,
@@ -128,6 +152,9 @@ class ResidualEncoderController(nn.Module):
         raw = self.linear(x)                    # (B, E)
         delta = self.residual_scale * torch.tanh(raw)
         return delta
+
+
+
 class EnsembleSharedVQC(nn.Module):
     def __init__(self, cfg):
         super().__init__()

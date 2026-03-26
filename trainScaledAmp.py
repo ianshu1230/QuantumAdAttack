@@ -160,7 +160,7 @@ class ScaledAmplitudeClassifier(nn.Module):
     """
     def __init__(self, cfg):
         super().__init__()
-        self.scaler = AmplitudeScalingGlobal(n_qubits=cfg.n_qubits, in_dim=cfg.in_dim)
+        self.scaler = AmplitudeScalingGlobal(in_dim=cfg.in_dim)
         self.vqc = VQC(cfg)
         self.head = nn.Linear(cfg.n_qubits, cfg.num_classes)
 

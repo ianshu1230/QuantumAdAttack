@@ -26,7 +26,7 @@ class VQC(nn.Module):
     
     def _lazy_init(self):
         # Random initialization of parameters
-        self.theta = nn.Parameter(0.01 * torch.randn(self.layers, self.n_qubits, 3, 
+        self.theta = nn.Parameter(0.01 * torch.randn(self.layers, self.n_qubits, 3,
                                                      dtype=torch.float32, device=self.device))
         # Use lightning for faster computation
         # self.qdev = qml.device("default.qubit", wires=self.n_qubits)
@@ -59,8 +59,8 @@ class VQC(nn.Module):
     
     def _build_qnode(self):
         n = self.n_qubits
-    
-        @qml.qnode(self.qdev, interface="torch", diff_method="adjoint")
+
+        @qml.qnode(self.qdev, interface="torch", diff_method="parameter-shift")
         def circuit(features, theta):
             self._apply_encoder(features)
             
@@ -111,21 +111,21 @@ class VQC(nn.Module):
 
 class AmplitudeScalingGlobal(nn.Module):
     """
-    方案 A: input-dependent global scalar。
-    scale(x) = softplus(linear(x))，每個 sample 根據輸入動態產生 scale。
-    x: (B, D)  →  x * scale(x)  →  (B, D)
+    Per-pixel input-dependent scaling before amplitude encoding.
+    scale(x) = softplus(linear(x)), shape (B, D), each pixel gets its own scale.
+    After scaling, AmplitudeEmbedding normalizes, so only the relative ratios matter.
+    x: (B, D) -> x * scale(x) -> (B, D)
     """
-    def __init__(self, n_qubits, in_dim):
+    def __init__(self, in_dim):
         super().__init__()
-        self.linear = nn.Linear(in_dim, 1)
+        self.linear = nn.Linear(in_dim, in_dim)
         nn.init.zeros_(self.linear.weight)
-        # bias 初始化讓 softplus(bias) ≈ 1/sqrt(2^n)
-        init_val = 1.0 / math.sqrt(2 ** n_qubits)
-        nn.init.constant_(self.linear.bias, math.log(math.expm1(init_val)))
+        # Initialize bias so softplus(bias) ≈ 1.0 (identity-like scaling at start)
+        nn.init.constant_(self.linear.bias, math.log(math.expm1(1.0)))
 
     def forward(self, x):
         # x: (B, D)
-        scale = torch.nn.functional.softplus(self.linear(x))  # (B, 1), always > 0
+        scale = torch.nn.functional.softplus(self.linear(x))  # (B, D), per-pixel > 0
         return x * scale                                       # (B, D)
 
 
